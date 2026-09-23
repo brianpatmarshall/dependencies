@@ -1,0 +1,47 @@
+server:
+  port: 8080
+
+spring:
+  application:
+    name: dep-graph-backend
+  mvc:
+    async:
+      # A full estate scan writes for a couple of minutes. The SSE endpoint holds the
+      # request open for the whole of it, so the default 30s timeout would cut the client
+      # off partway through a scan that then completes invisibly.
+      request-timeout: 30m
+
+neo4j:
+  uri: ${NEO4J_URI:bolt://localhost:7689}
+  username: ${NEO4J_USERNAME:neo4j}
+  password: ${NEO4J_PASSWORD:depgraph}
+
+depgraph:
+  # A security boundary, not a convenience setting: the scanner reads every pom and class
+  # file beneath whatever path it is given. Compose narrows this to the read-only mount.
+  allowed-roots: ${DEPGRAPH_ALLOWED_ROOTS:/projects,/src}
+
+  # Dependency jars for the code plane. The read-only /m2 mount in compose.
+  local-repository: ${DEPGRAPH_LOCAL_REPOSITORY:${user.home}/.m2/repository}
+  offline: ${DEPGRAPH_OFFLINE:false}
+
+  # Library types are 97% of the graph on this estate. Turning them off makes it small and
+  # fast and gives up every question that crosses the boundary, which is most of the
+  # interesting ones.
+  include-third-party-types: ${DEPGRAPH_INCLUDE_THIRD_PARTY:true}
+
+  # :Method and :Field nodes. 300,000 more nodes that no canned query needs, because every
+  # edge is already type-to-type with its member recorded on the relationship.
+  include-members: ${DEPGRAPH_INCLUDE_MEMBERS:false}
+
+  batch-size: 10000
+  query-timeout-seconds: 60
+  max-query-rows: 1000
+
+springdoc:
+  swagger-ui:
+    path: /swagger-ui.html
+
+logging:
+  level:
+    com.boeing.depgraph: INFO

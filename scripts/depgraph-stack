@@ -1,0 +1,64 @@
+#!/usr/bin/env bash
+#
+# depgraph-stack - bring the graph stack up in the right order.
+#
+# The backend image is runtime-only: every pom in this estate inherits aero-parent, which
+# lives outside this repository, so the jar is built on the host where that parent is
+# installed and then copied into the image. This script is the one command that does both.
+#
+#   scripts/depgraph-stack up        # build the jar, build the images, start everything
+#   scripts/depgraph-stack api       # graph and API only, no UI
+#   scripts/depgraph-stack down      # stop, keeping the graph
+#   scripts/depgraph-stack reset     # stop and discard the graph volume
+#   scripts/depgraph-stack logs
+#   scripts/depgraph-stack status
+set -euo pipefail
+
+# `cd` prints its target when CDPATH is set, which would put two lines in `here`.
+here="$(CDPATH= cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
+cd "${here}"
+
+frontend_port="${FRONTEND_PORT:-9093}"
+backend_port="${BACKEND_PORT:-9094}"
+neo4j_port="${NEO4J_HTTP_PORT:-7476}"
+
+build_jar() {
+    echo "==> Building the backend jar" >&2
+    mvn -B -q -DskipTests package
+}
+
+case "${1:-up}" in
+    up)
+        build_jar
+        echo "==> Starting neo4j, backend and frontend" >&2
+        docker compose up -d --build
+        echo >&2
+        echo "    UI      http://localhost:${frontend_port}" >&2
+        echo "    API     http://localhost:${backend_port}/swagger-ui.html" >&2
+        echo "    Neo4J   http://localhost:${neo4j_port}" >&2
+        ;;
+    api)
+        build_jar
+        echo "==> Starting neo4j and backend only" >&2
+        docker compose up -d --build neo4j backend
+        echo "    API     http://localhost:${backend_port}/swagger-ui.html" >&2
+        ;;
+    down)
+        docker compose down
+        ;;
+    reset)
+        # -v discards the neo4j volume, which is also the only way to change the password.
+        docker compose down -v
+        ;;
+    logs)
+        shift
+        docker compose logs -f "$@"
+        ;;
+    status)
+        docker compose ps
+        ;;
+    *)
+        echo "usage: depgraph-stack [up|api|down|reset|logs|status]" >&2
+        exit 1
+        ;;
+esac

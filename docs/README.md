@@ -78,25 +78,60 @@ into a block.
 
 ## Status
 
-**Both analysis planes and the CLI are in**, with 46 tests. `dep-graph-core` reads poms, resolves
-effective versions, maps how the poms point at each other, classifies conflicts, proposes
-a BOM, and reads compiled bytecode into seventeen kinds of class-to-class edge.
+**Complete end to end**, with 157 tests. `dep-graph-core` reads poms, resolves effective
+versions, maps how the poms point at each other, classifies conflicts, proposes a BOM, and
+reads compiled bytecode into seventeen kinds of class-to-class edge. `dep-graph-backend`
+writes all of it into Neo4J and serves 27 canned queries; `dep-graph-frontend` is the UI
+you click them in.
 
-On the Aero estate: 33 poms and 146 dependencies on one side; 33,211 classes into 192,441
-edges in 4.6 seconds on the other.
+On the Aero estate: 36 modules and 163 dependencies on one side; 35,727 classes into
+203,751 relationships on the other. A full scan and graph write takes about 28 seconds.
 
-Not written yet: the Neo4J backend and its Cypher writes, and the frontend. The `FROM` bridge is **collected but not yet joined** — every type records
-the jar or `target/classes` it came from, but writing that into the graph is the
-populator's job.
+**The `FROM` bridge is joined.** Every type is now connected to the module or artifact
+version that supplied it, which is what makes the six queries under "Where the poms and
+the bytecode disagree" possible at all.
+
+Still not built: the OpenRewrite pom rewriter (§9.3.7).
 
 ## Modules
 
 | Module | What it is |
 |---|---|
 | `dep-graph-core` | The analysis engine — poms, bytecode, conflicts, BOM proposal. Pure records and plain Java; no Spring, no HTTP, no Neo4J. |
-| `dep-graph-backend` | *Not yet written.* Spring Boot REST API, raw `neo4j-java-driver` and hand-written Cypher. |
+| `dep-graph-backend` | Spring Boot REST API. Raw `neo4j-java-driver` and hand-written Cypher, the canned-query catalogue, and a read-only ad-hoc endpoint. |
+| `dep-graph-frontend` | React 18 + Vite + Tailwind behind nginx. Dashboard, scan runner, query browser. Not a Maven module. |
 | `scripts/depgraph` | The CLI. A shaded runnable jar — no Docker, no Neo4J, no backend. |
-| `dep-graph-frontend` | *Not yet written.* React + Vite + Tailwind behind nginx. Not a Maven module. |
+| `scripts/depgraph-stack` | Brings the three containers up in the right order. |
+
+## The graph stack
+
+```bash
+cp .env.example .env          # set SCAN_ROOT to the tree you want to analyse
+scripts/depgraph-stack up     # builds the jar, then starts neo4j + backend + frontend
+```
+
+| Surface | URL |
+|---|---|
+| UI | http://localhost:9093 |
+| API + Swagger | http://localhost:9094/swagger-ui.html |
+| Neo4J browser | http://localhost:7476 (bolt 7689) |
+| Frontend dev server | http://localhost:3005 (`npm run dev`) |
+
+Each part starts on its own — `docker compose up -d neo4j`, `... backend`, `... frontend`,
+or `scripts/depgraph-stack api` for the graph and API without building the UI.
+
+The backend image is **runtime-only**: it copies a jar built on the host. Every pom here
+inherits `aero-parent`, which lives outside this repository and therefore outside any
+build context rooted at it, so building in-image would mean shipping the whole estate to
+the Docker daemon. `scripts/depgraph-stack` does the two steps in order.
+
+### The canned queries
+
+27 of them, in five groups, each carrying the question it answers in plain words and — where
+it has one — the reason its answer might be wrong. The group that matters is **"Where the
+poms and the bytecode disagree"**: declared but never used, used but never declared, blast
+radius, what couples two modules. None of those can be answered by reading poms or bytecode
+alone, which is the whole argument for putting both planes in one graph.
 
 ## Building
 

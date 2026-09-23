@@ -1,0 +1,9 @@
+# The backend image copies one jar. Everything else would only slow the context upload.
+**/target/*
+!dep-graph-backend/target/*.jar
+**/node_modules
+dep-graph-frontend/dist
+docs
+diagrams
+projects
+.git

@@ -7,8 +7,10 @@ import org.slf4j.LoggerFactory;
 
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
 
 /**
@@ -62,7 +64,34 @@ public final class ArtifactJars {
         return List.copyOf(jars);
     }
 
-    static Path pathOf(Gav gav, Path localRepository) {
+    /**
+     * The jar each declared dependency resolves to, keyed by absolute path.
+     *
+     * <p>The inverse of {@link #resolve}, and the other half of the {@code FROM} bridge.
+     * {@link com.boeing.depgraph.model.TypeRef#originPath()} records the jar a type was
+     * read from; this is what turns that string back into the artifact version that
+     * supplied it. Sharing one path calculation between the two directions is deliberate
+     * - a second implementation that drifted by one character would silently attribute
+     * nothing, and an empty bridge looks exactly like a project that uses no libraries.
+     *
+     * @return absolute jar path to GAV, for jars that exist
+     */
+    public static Map<String, Gav> index(List<DeclaredDependency> dependencies, Path localRepository) {
+        Map<String, Gav> byPath = new LinkedHashMap<>();
+        for (DeclaredDependency dependency : dependencies) {
+            Gav gav = dependency.gav();
+            if (gav.version() == null || gav.version().endsWith("-SNAPSHOT")) {
+                continue;
+            }
+            Path jar = pathOf(gav, localRepository);
+            if (Files.isRegularFile(jar)) {
+                byPath.putIfAbsent(jar.toAbsolutePath().toString(), gav);
+            }
+        }
+        return Map.copyOf(byPath);
+    }
+
+    public static Path pathOf(Gav gav, Path localRepository) {
         return localRepository
             .resolve(gav.groupId().replace('.', '/'))
             .resolve(gav.artifactId())

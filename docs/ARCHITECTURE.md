@@ -872,30 +872,57 @@ proves the logic; only the estate shows whether the output is worth reading.
 | Build plane end to end | Done, dogfooded on the estate |
 | Pom relationship taxonomy (`ModuleRelation`) | Done, 4 relations, all captured |
 | Class relationship taxonomy (`TypeRelation`) | Done, 17 relations, all captured |
-| ASM code plane | Done — 33k classes in 4.6s, dogfooded |
+| ASM code plane | Done — 35,727 types in ~5s, dogfooded |
 | `ProjectScanner` composing both planes | Done |
 | `scripts/depgraph` CLI + shaded runnable jar | Done |
-| Tests | 46 — 18 build plane, 15 code plane, 13 CLI |
+| **`dep-graph-backend`, Neo4J writes** | **Done** — schema, both planes, both rollups |
+| **The `FROM` bridge, joined** | **Done** — `OriginIndex`, 35,727 edges |
+| **Canned query catalogue** | **Done** — 27 queries in 5 groups |
+| **`dep-graph-frontend`** | **Done** — dashboard, scan runner, query browser |
+| **`docker-compose.yml`, `scripts/depgraph-stack`** | **Done** — 3 containers, all ports parameterised |
+| Tests | 157 — 46 core, 111 catalogue |
 | Single-module projects | Done, fixture + tests; run against four real repos |
 | `BomXmlWriter` — pasteable `<dependencyManagement>` | Done |
 | `README.md`, this document | Done |
 
+#### What bringing the stack up changed
+
+Four things were wrong and are worth recording, because three of them were invisible
+until the graph existed.
+
+1. **`-parameters` is not set by `aero-parent`.** `spring-boot-starter-parent` sets it and
+   we do not inherit that, so every `@PathVariable` and `@RequestParam` failed at *request*
+   time while the context started perfectly cleanly. Set in `dep-graph-backend/pom.xml`
+   rather than in the unversioned `platform/`. Note that `mvn package` will not recompile
+   after a change to compiler configuration — it needs `clean`.
+
+2. **Comparing at version level made the bridge lie.** One class is one `:Type` node, so
+   `org.slf4j.Logger` read from both slf4j 2.0.13 and 2.0.18 bridges to *both* versions.
+   Asking "does this module use this artifact **version**" therefore reported almost every
+   library as undeclared. Both bridge queries now compare on `groupId:artifactId`
+   through `:VERSION_OF`. This halved the row count and every remaining row is real.
+
+3. **In-scan modules bridge to `:Module`, not `:ArtifactVersion`.** The first artifact-level
+   fix still reported `const-catalog-backend` as not using `const-catalog-core` while
+   `code-vs-declared` showed it using it with weight 865. A dependency that resolves to a
+   module in the same scan needs the `:Module` arm of the check as well.
+
+4. **12.8% of edges were being dropped silently.** `MATCH (b:Type {fqn: ...})` simply fails
+   when the target class was never read, and the row disappears. 26,099 of 203,751
+   relationships went this way. The cause is §9.3.1: only *directly declared* jars are read,
+   so `org.apache.pulsar.client.api.Producer` — which lives in the companion artifact
+   `pulsar-client-api` — is not a node, and every edge to it vanishes. That is precisely
+   what makes `pulsar-client` appear in "declared but never used" when `PulsarSender`
+   plainly uses it.
+
+   The count is now written to the `:Project` node and shown on the dashboard, and
+   `silent-dependencies` lists the artifacts that contributed no types at all. A graph that
+   quietly loses an eighth of its edges looks exactly like a codebase that is less coupled
+   than it is, and nothing else in the system would ever contradict it.
+
 ### 9.2 Not built
 
-`dep-graph-backend` · docker-compose · `dep-graph-frontend`
-(`/`, `/scan`, `/conflicts`, `/query`) · the `GraphPopulatorService` Cypher writes · the
-materialised `DEPENDS_ON` rollup · the OpenRewrite pom rewriter.
-
-Gradle is **out of scope by decision, not oversight** — the whole build plane rests on
-Maven's `ModelBuilder`, and Gradle has no equivalent that can be called as a library
-against an unbuilt project. It would be a second reader producing the same `ScanResult`,
-which is why that record is the seam it is.
-
-**The `FROM` bridge is collected but not yet joined.** `TypeRef.originPath` records the
-`target/classes` directory or jar every type came from, which is everything needed to
-write the edge; turning that into `(:Type)-[:FROM]->(:Module|:ArtifactVersion)` is the
-populator's job and the populator is not written. Until it is, the two planes are in one
-`ScanResult` but not yet in one graph — and the queries in §6.3 are designs, not results.
+The OpenRewrite pom rewriter (§9.3.7). Gradle remains out of scope by decision.
 
 ### 9.3 Open for this review
 
@@ -1176,9 +1203,8 @@ from *"the tool broke"*.
 
 ### A.5 The graph stack
 
-> **⚠ NOT BUILT YET.** `dep-graph-backend`, `dep-graph-frontend` and `docker-compose.yml`
-> do not exist. This section is the agreed design, recorded here so the guide is complete
-> when they land. Everything in A.4 works today; nothing in A.5 or A.6 does.
+> Built and working. `scripts/depgraph-stack up` builds the backend jar and starts all
+> three containers; see §9.1 for what was learned bringing it up.
 
 #### A.5.1 Starting everything
 

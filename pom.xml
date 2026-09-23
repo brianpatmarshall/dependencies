@@ -34,6 +34,7 @@
 
     <modules>
         <module>dep-graph-core</module>
+        <module>dep-graph-backend</module>
     </modules>
 
     <!--

@@ -1,0 +1,105 @@
+# dep-graph - local stack
+# =======================
+# Three containers, one per piece of logically separate code: the graph, the API that
+# writes and reads it, and the UI.
+#
+#   scripts/depgraph-stack up          # build the jar, then start everything
+#   docker compose up -d neo4j backend # graph and API only, no UI build
+#   docker compose up -d --build       # everything, assuming the jar is already built
+#
+#   UI       http://localhost:9093
+#   API      http://localhost:9094/swagger-ui.html
+#   Neo4J    http://localhost:7476   (user neo4j, password from NEO4J_PASSWORD)
+#
+# The ports avoid every sibling in this estate: constants holds 7474/7687, messaging-discovery
+# 7475/7688 and 3002, service-discovery 9091/9092, bcf and observability 9090 and 3000.
+#
+# Every port and credential below can be overridden from a .env file in this directory.
+
+name: dep-graph
+
+services:
+
+  # ------------------------------------------------------------------ neo4j
+  neo4j:
+    image: neo4j:5.26-community
+    environment:
+      NEO4J_AUTH: neo4j/${NEO4J_PASSWORD:-depgraph}
+      # A full estate scan writes a few hundred thousand relationships. The defaults are
+      # sized for a laptop and are not enough for that; these are the smallest values that
+      # got the aero estate in without a page-cache thrash.
+      NEO4J_server_memory_pagecache_size: 1G
+      NEO4J_server_memory_heap_max__size: 2G
+      NEO4J_server_memory_heap_initial__size: 1G
+    ports:
+      - "${NEO4J_HTTP_PORT:-7476}:7474"
+      - "${NEO4J_BOLT_PORT:-7689}:7687"
+    volumes:
+      - neo4j-data:/data
+      - neo4j-logs:/logs
+    healthcheck:
+      # A real query, because the HTTP port comes up well before bolt will accept a
+      # session and the backend needs bolt.
+      test: ["CMD-SHELL", "cypher-shell -u neo4j -p ${NEO4J_PASSWORD:-depgraph} 'RETURN 1' >/dev/null 2>&1 || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 30s
+    restart: unless-stopped
+
+  # ------------------------------------------------------------------ backend
+  backend:
+    # Must keep the name `backend`: dep-graph-frontend/nginx.conf proxies to
+    # http://backend:8080 and nginx resolves that name at startup.
+    build:
+      # Root context, but a runtime-only Dockerfile - it copies a jar built on the host.
+      # See the comment in dep-graph-backend/Dockerfile for why it cannot build in-image.
+      context: .
+      dockerfile: dep-graph-backend/Dockerfile
+      args:
+        JAVA_VERSION: ${JAVA_VERSION:-21}
+    depends_on:
+      neo4j:
+        condition: service_healthy
+    environment:
+      NEO4J_URI: bolt://neo4j:7687
+      NEO4J_USERNAME: neo4j
+      NEO4J_PASSWORD: ${NEO4J_PASSWORD:-depgraph}
+
+      # A security boundary, not a convenience setting: the scanner reads every pom and
+      # class file under whatever path it is given. Narrowed to the read-only mount below.
+      DEPGRAPH_ALLOWED_ROOTS: /projects
+
+      # Dependency jars for the code plane, read from the host's local repository. Offline
+      # because everything the scan needs is already there - a scan should not be able to
+      # sit waiting on Maven Central.
+      DEPGRAPH_LOCAL_REPOSITORY: /m2
+      DEPGRAPH_OFFLINE: "true"
+
+      SPRINGDOC_SERVER_URL: ${SPRINGDOC_SERVER_URL:-http://localhost:9094}
+    ports:
+      - "${BACKEND_PORT:-9094}:8080"
+    volumes:
+      # The code to analyse. Read-only: the scanner only ever reads.
+      - ${SCAN_ROOT:-./projects}:/projects:ro
+      # The local repository, for the code plane's library jars. Also read-only.
+      - ${M2_REPO:-${HOME}/.m2/repository}:/m2:ro
+    restart: unless-stopped
+
+  # ------------------------------------------------------------------ frontend
+  frontend:
+    build:
+      # Its own context: the frontend needs nothing from the Maven reactor.
+      context: ./dep-graph-frontend
+    depends_on:
+      # Not just ordering. nginx resolves the `backend` upstream at startup and exits if
+      # it cannot, so the API has to be up first.
+      backend:
+        condition: service_healthy
+    ports:
+      - "${FRONTEND_PORT:-9093}:80"
+    restart: unless-stopped
+
+volumes:
+  neo4j-data:
+  neo4j-logs:
