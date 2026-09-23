@@ -1,0 +1,43 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+    A single-module project: one pom, no parent, no <modules>, nothing aggregated.
+
+    The shape most repositories actually are. Everything the analyser does has to work
+    here too, and several things that are interesting in an estate are vacuous in one
+    module - there is nobody to disagree with about a version. What remains valuable is
+    the hoist: five hand-pinned versions that belong in a dependencyManagement block.
+-->
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
+    <modelVersion>4.0.0</modelVersion>
+
+    <groupId>com.acme</groupId>
+    <artifactId>standalone-tool</artifactId>
+    <version>2.4.0</version>
+    <packaging>jar</packaging>
+
+    <name>Standalone Tool</name>
+
+    <properties>
+        <guava.version>32.1.3-jre</guava.version>
+    </properties>
+
+    <dependencies>
+        <dependency>
+            <groupId>com.google.guava</groupId>
+            <artifactId>guava</artifactId>
+            <version>${guava.version}</version>
+        </dependency>
+        <dependency>
+            <groupId>org.apache.commons</groupId>
+            <artifactId>commons-lang3</artifactId>
+            <version>3.14.0</version>
+        </dependency>
+        <dependency>
+            <groupId>org.slf4j</groupId>
+            <artifactId>slf4j-api</artifactId>
+            <version>2.0.13</version>
+        </dependency>
+    </dependencies>
+</project>

@@ -1,0 +1,10 @@
+target/
+node_modules/
+dist/
+.env
+*.log
+.idea/
+.vscode/
+*.iml
+diagrams/
+docs/*.docx

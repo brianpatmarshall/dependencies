@@ -1,0 +1,13 @@
+# Versions this project is staying on deliberately.
+#
+# Anything listed here is proposed at the held version and stops being reported as
+# something to fix. A hold without a reason is ignored on purpose: an unexplained hold
+# is indistinguishable from neglect, which is the thing holds exist to be distinguished
+# from.
+holds:
+  - artifact: org.apache.pulsar:pulsar-client
+    version: 3.3.1
+    reason: >-
+      4.x changes the schema and subscription APIs. This is an API migration rather
+      than a bump, so it gets scheduled rather than inherited.
+    until: when the messaging layer moves off the 3.x subscription API

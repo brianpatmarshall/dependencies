@@ -1,0 +1,31 @@
+#!/usr/bin/env bash
+#
+# depgraph - analyse any Maven project's dependencies.
+#
+# Runs the analyser directly on this machine: no Docker, no Neo4J, no backend. That is
+# deliberate. The graph and the UI are worth standing up when you want to explore an
+# estate; answering "what is this repository on, and what would a BOM look like" should
+# cost one command and a JDK.
+#
+#   scripts/depgraph ~/src/my-service
+#   scripts/depgraph ~/src/my-service --bom
+#   scripts/depgraph ~/src/monorepo --json > deps.json
+#
+# Narration goes to stderr and data to stdout, so the redirect above does what it looks
+# like.
+set -euo pipefail
+
+# `cd` prints its target when CDPATH is set, which would put two lines in `here`
+# and break every path built from it. Unsetting it is cheaper than filtering.
+here="$(CDPATH= cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
+jar="$(ls "${here}"/dep-graph-core/target/dep-graph-core-*-cli.jar 2>/dev/null | head -1 || true)"
+
+if [[ -z "${jar}" ]]; then
+    echo "depgraph: no CLI jar found. Build it first:" >&2
+    echo "    mvn -f ${here}/pom.xml package -DskipTests" >&2
+    exit 3
+fi
+
+# M2_REPO is honoured by the CLI itself; exporting it here means the container and the
+# host read the same setting from the same place.
+exec java ${DEPGRAPH_JAVA_OPTS:-} -jar "${jar}" "$@"

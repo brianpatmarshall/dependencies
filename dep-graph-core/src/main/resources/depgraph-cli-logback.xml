@@ -1,0 +1,28 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+    Logging for the CLI only.
+
+    Deliberately NOT named logback.xml. A library jar that ships a logback.xml hijacks the
+    logging of everything that depends on it, and dep-graph-core is a dependency of the
+    backend. DepGraphCli points logback at this file by name before the first logger
+    exists; nothing else ever loads it.
+
+    Aether logs every lock acquisition and local-repository decision at DEBUG, which on a
+    real scan buries the report under a few hundred lines nobody asked for.
+-->
+<configuration>
+    <appender name="STDERR" class="ch.qos.logback.core.ConsoleAppender">
+        <!-- stderr, because stdout is the data stream. -->
+        <target>System.err</target>
+        <encoder>
+            <pattern>%-5level %msg%n</pattern>
+        </encoder>
+    </appender>
+
+    <logger name="org.eclipse.aether" level="WARN"/>
+    <logger name="org.apache" level="WARN"/>
+
+    <root level="${depgraph.log.level:-INFO}">
+        <appender-ref ref="STDERR"/>
+    </root>
+</configuration>

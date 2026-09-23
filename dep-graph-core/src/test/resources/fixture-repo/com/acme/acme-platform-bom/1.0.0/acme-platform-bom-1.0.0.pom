@@ -1,0 +1,36 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+    Stands in for spring-boot-dependencies in the fixture.
+
+    A real imported BOM would do, but then the test would only pass on a machine whose
+    ~/.m2 happened to hold it and the forty BOMs it imports in turn. This one lives in
+    src/test/resources/fixture-repo and is resolved from there, so the scanner test is
+    offline, deterministic and says the same thing on a fresh clone.
+-->
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
+    <modelVersion>4.0.0</modelVersion>
+
+    <groupId>com.acme</groupId>
+    <artifactId>acme-platform-bom</artifactId>
+    <version>1.0.0</version>
+    <packaging>pom</packaging>
+
+    <name>Acme Platform BOM</name>
+
+    <dependencyManagement>
+        <dependencies>
+            <dependency>
+                <groupId>com.fasterxml.jackson.core</groupId>
+                <artifactId>jackson-databind</artifactId>
+                <version>2.17.1</version>
+            </dependency>
+            <dependency>
+                <groupId>org.assertj</groupId>
+                <artifactId>assertj-core</artifactId>
+                <version>3.25.3</version>
+            </dependency>
+        </dependencies>
+    </dependencyManagement>
+</project>

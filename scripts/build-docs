@@ -1,0 +1,12 @@
+#!/usr/bin/env bash
+#
+# Regenerate the Word copies of the Markdown docs.
+#
+# The Markdown is the source of truth; the .docx files are built artifacts for people who
+# want to read or annotate them in Word. Run this after editing any doc under docs/.
+#
+# Needs: pandoc, and mermaid-cli for the diagrams (npm i -g @mermaid-js/mermaid-cli).
+set -euo pipefail
+
+here="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+"${here}/scripts/md2docx.py" "${here}/docs/ARCHITECTURE.md" "${here}/docs/Architecture.docx"

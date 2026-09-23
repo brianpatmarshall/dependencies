@@ -1,0 +1,154 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
+    <modelVersion>4.0.0</modelVersion>
+
+    <parent>
+        <groupId>com.boeing</groupId>
+        <artifactId>dep-graph-parent</artifactId>
+        <version>1.0-SNAPSHOT</version>
+    </parent>
+
+    <artifactId>dep-graph-core</artifactId>
+    <packaging>jar</packaging>
+
+    <name>Dependency Graph - Core</name>
+    <description>
+        Analysis engine. Builds the effective Maven model of every module in a project,
+        records where each dependency version came from, classifies the version skew
+        between modules, and proposes the BOM that would remove it. Knows nothing of
+        Spring, HTTP or Neo4J.
+    </description>
+
+    <dependencies>
+        <!--
+            Maven's own model builder, used to read poms rather than to run a build:
+            inheritance applied, properties interpolated, imported BOMs flattened.
+        -->
+        <dependency>
+            <groupId>org.apache.maven</groupId>
+            <artifactId>maven-model-builder</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>org.apache.maven</groupId>
+            <artifactId>maven-artifact</artifactId>
+        </dependency>
+        <dependency>
+            <!--
+                Fetches the parent and BOM poms the model builder asks for. The `supplier`
+                artifact hands over a wired RepositorySystem without a Sisu container.
+            -->
+            <groupId>org.apache.maven.resolver</groupId>
+            <artifactId>maven-resolver-supplier</artifactId>
+        </dependency>
+
+        <!-- Reads compiled bytecode for the code plane. -->
+        <dependency>
+            <groupId>org.ow2.asm</groupId>
+            <artifactId>asm</artifactId>
+        </dependency>
+
+        <!-- Machine-readable CLI output, and the shape the REST API will return. -->
+        <dependency>
+            <groupId>com.fasterxml.jackson.core</groupId>
+            <artifactId>jackson-databind</artifactId>
+        </dependency>
+
+        <!-- .depgraph-holds.yml -->
+        <dependency>
+            <groupId>org.yaml</groupId>
+            <artifactId>snakeyaml</artifactId>
+        </dependency>
+
+        <dependency>
+            <groupId>org.slf4j</groupId>
+            <artifactId>slf4j-api</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>ch.qos.logback</groupId>
+            <artifactId>logback-classic</artifactId>
+        </dependency>
+
+        <dependency>
+            <groupId>org.junit.jupiter</groupId>
+            <artifactId>junit-jupiter</artifactId>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>org.assertj</groupId>
+            <artifactId>assertj-core</artifactId>
+            <scope>test</scope>
+        </dependency>
+    </dependencies>
+
+    <build>
+        <plugins>
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-compiler-plugin</artifactId>
+            </plugin>
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-surefire-plugin</artifactId>
+            </plugin>
+
+            <!--
+                A second artifact: dep-graph-core.jar stays a plain library for the
+                backend to depend on, and dep-graph-cli.jar is the runnable one.
+
+                Shaded rather than assembled because the CLI has to work with nothing but
+                a JDK on the PATH - the point of `depgraph <path>` is that someone can
+                analyse a repository without first standing up Docker, Neo4J and a
+                frontend.
+            -->
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-shade-plugin</artifactId>
+                <executions>
+                    <execution>
+                        <phase>package</phase>
+                        <goals>
+                            <goal>shade</goal>
+                        </goals>
+                        <configuration>
+                            <shadedArtifactAttached>true</shadedArtifactAttached>
+                            <shadedClassifierName>cli</shadedClassifierName>
+                            <createDependencyReducedPom>false</createDependencyReducedPom>
+                            <transformers>
+                                <transformer
+                                    implementation="org.apache.maven.plugins.shade.resource.ManifestResourceTransformer">
+                                    <mainClass>com.boeing.depgraph.cli.DepGraphCli</mainClass>
+                                </transformer>
+                                <!--
+                                    Maven's own libraries ship plexus component descriptors
+                                    and service files that must be merged, not overwritten.
+                                    Without these two the shaded jar starts and then fails
+                                    to build a single model.
+                                -->
+                                <transformer
+                                    implementation="org.apache.maven.plugins.shade.resource.ServicesResourceTransformer"/>
+                                <transformer
+                                    implementation="org.apache.maven.plugins.shade.resource.AppendingTransformer">
+                                    <resource>META-INF/plexus/components.xml</resource>
+                                </transformer>
+                            </transformers>
+                            <filters>
+                                <filter>
+                                    <artifact>*:*</artifact>
+                                    <excludes>
+                                        <!-- Signed jars will not verify once repacked. -->
+                                        <exclude>META-INF/*.SF</exclude>
+                                        <exclude>META-INF/*.DSA</exclude>
+                                        <exclude>META-INF/*.RSA</exclude>
+                                        <exclude>module-info.class</exclude>
+                                    </excludes>
+                                </filter>
+                            </filters>
+                        </configuration>
+                    </execution>
+                </executions>
+            </plugin>
+        </plugins>
+    </build>
+</project>
