@@ -7,6 +7,7 @@ import com.boeing.depgraph.model.DeclaredDependency;
 import com.boeing.depgraph.model.ManagedDependency;
 import com.boeing.depgraph.model.ModuleLink;
 import com.boeing.depgraph.model.ModuleRef;
+import com.boeing.depgraph.model.ResolvedArtifact;
 import com.boeing.depgraph.model.VersionHold;
 
 import java.util.List;
@@ -64,6 +65,17 @@ public record ScanResult(
      * confidently wrong.
      */
     List<ModuleProblem> problems,
+
+    /**
+     * Each module's real classpath after resolution, transitives included.
+     *
+     * <p>Empty when only the build plane was run. Distinct from {@link #dependencies},
+     * which is what the poms declare: this is what Maven would actually put on the
+     * classpath, and it is what the code plane reads. A class can only become a node if
+     * the jar holding it was read, and plenty of classes real code compiles against
+     * arrive through an artifact nobody names.
+     */
+    List<ResolvedArtifact> classpath,
 
     /**
      * The code plane, or null when only the build plane was run.

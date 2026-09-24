@@ -132,8 +132,16 @@ public class BuildPlaneScanner {
             proposal,
             holds,
             List.copyOf(problems),
+            // No classpath: resolving one means collecting every module's dependency graph,
+            // which is the code plane's cost and pointless without it.
+            List.of(),
             null,
             stats);
+    }
+
+    /** The configured reader, so a caller can build a matching classpath closure. */
+    public EffectiveModelReader reader() {
+        return reader;
     }
 
     /** One pom read, for the progress stream. */

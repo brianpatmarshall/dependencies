@@ -1,11 +1,13 @@
 package com.boeing.depgraph.scanner;
 
-import com.boeing.depgraph.code.ArtifactJars;
 import com.boeing.depgraph.code.ClassPlaneScanner;
 import com.boeing.depgraph.code.CodeScanResult;
+import com.boeing.depgraph.maven.DependencyClosure;
+import com.boeing.depgraph.model.ResolvedArtifact;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.List;
 
@@ -24,20 +26,20 @@ public class ProjectScanner {
 
     private final BuildPlaneScanner buildPlane;
     private final ClassPlaneScanner classPlane;
-    private final Path localRepository;
+    private final DependencyClosure closure;
 
     public ProjectScanner(BuildPlaneScanner buildPlane, ClassPlaneScanner classPlane,
-                          Path localRepository) {
+                          DependencyClosure closure) {
         this.buildPlane = buildPlane;
         this.classPlane = classPlane;
-        this.localRepository = localRepository;
+        this.closure = closure;
     }
 
     public static ProjectScanner withLocalRepository(Path localRepository, boolean offline) {
         return new ProjectScanner(
             BuildPlaneScanner.withLocalRepository(localRepository, offline),
             new ClassPlaneScanner(),
-            localRepository);
+            DependencyClosure.forLocalRepository(localRepository, offline));
     }
 
     // ------------------------------------------------------------------
@@ -57,7 +59,16 @@ public class ProjectScanner {
     public ScanResult scan(Path scanRoot) {
         ScanResult build = buildPlane.scan(scanRoot);
 
-        List<Path> jars = ArtifactJars.resolve(build.dependencies(), localRepository);
+        // The full classpath, not just what the poms name. Reading only declared jars left
+        // every transitively supplied class out of the graph, and an edge whose target is
+        // missing is not a smaller graph - it is a silently wrong one.
+        List<ResolvedArtifact> classpath = closure.resolve(build.dependencies());
+        List<Path> jars = classpath.stream()
+            .map(ResolvedArtifact::jarPath)
+            .distinct()
+            .map(Path::of)
+            .filter(Files::isRegularFile)
+            .toList();
         CodeScanResult code = classPlane.scan(build.modules(), jars);
 
         if (!code.modulesWithoutClasses().isEmpty()) {
@@ -69,6 +80,6 @@ public class ProjectScanner {
         return new ScanResult(
             build.projectPath(), build.projectName(), build.modules(), build.dependencies(),
             build.managed(), build.links(), build.artifacts(), build.proposal(),
-            build.holds(), build.problems(), code, build.stats());
+            build.holds(), build.problems(), classpath, code, build.stats());
     }
 }

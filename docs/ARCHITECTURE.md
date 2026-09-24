@@ -880,15 +880,18 @@ proves the logic; only the estate shows whether the output is worth reading.
 | **Canned query catalogue** | **Done** — 27 queries in 5 groups |
 | **`dep-graph-frontend`** | **Done** — dashboard, scan runner, query browser |
 | **`docker-compose.yml`, `scripts/depgraph-stack`** | **Done** — 3 containers, all ports parameterised |
-| Tests | 157 — 46 core, 111 catalogue |
+| **Transitive classpath closure** | **Done** — `DependencyClosure`, `RESOLVES` edges |
+| **Test fixtures excluded** | **Done** — `PomLocator`, relative-path rule |
+| Tests | 167 — 48 core, 119 catalogue |
 | Single-module projects | Done, fixture + tests; run against four real repos |
 | `BomXmlWriter` — pasteable `<dependencyManagement>` | Done |
 | `README.md`, this document | Done |
 
 #### What bringing the stack up changed
 
-Four things were wrong and are worth recording, because three of them were invisible
-until the graph existed.
+Eight defects, and almost none of them were visible until the graph existed. The first four
+were found standing the stack up; the last four were found chasing the one number that
+refused to go to zero.
 
 1. **`-parameters` is not set by `aero-parent`.** `spring-boot-starter-parent` sets it and
    we do not inherit that, so every `@PathVariable` and `@RequestParam` failed at *request*
@@ -899,26 +902,54 @@ until the graph existed.
 2. **Comparing at version level made the bridge lie.** One class is one `:Type` node, so
    `org.slf4j.Logger` read from both slf4j 2.0.13 and 2.0.18 bridges to *both* versions.
    Asking "does this module use this artifact **version**" therefore reported almost every
-   library as undeclared. Both bridge queries now compare on `groupId:artifactId`
-   through `:VERSION_OF`. This halved the row count and every remaining row is real.
+   library as undeclared. Both bridge queries now compare on `groupId:artifactId`.
 
-3. **In-scan modules bridge to `:Module`, not `:ArtifactVersion`.** The first artifact-level
-   fix still reported `const-catalog-backend` as not using `const-catalog-core` while
-   `code-vs-declared` showed it using it with weight 865. A dependency that resolves to a
-   module in the same scan needs the `:Module` arm of the check as well.
+3. **In-scan modules bridge to `:Module`, not `:ArtifactVersion`.** The artifact-level fix
+   still reported `const-catalog-backend` as not using `const-catalog-core` while
+   `code-vs-declared` showed it using it with weight 865.
 
-4. **12.8% of edges were being dropped silently.** `MATCH (b:Type {fqn: ...})` simply fails
-   when the target class was never read, and the row disappears. 26,099 of 203,751
-   relationships went this way. The cause is §9.3.1: only *directly declared* jars are read,
-   so `org.apache.pulsar.client.api.Producer` — which lives in the companion artifact
-   `pulsar-client-api` — is not a node, and every edge to it vanishes. That is precisely
-   what makes `pulsar-client` appear in "declared but never used" when `PulsarSender`
-   plainly uses it.
+4. **Edges were being dropped silently.** `MATCH (b:Type {fqn: ...})` simply fails when the
+   target class was never read, and the row disappears — 26,099 of 203,751 relationships,
+   an eighth of the graph. Everything below is the hunt for the causes.
 
-   The count is now written to the `:Project` node and shown on the dashboard, and
-   `silent-dependencies` lists the artifacts that contributed no types at all. A graph that
-   quietly loses an eighth of its edges looks exactly like a codebase that is less coupled
-   than it is, and nothing else in the system would ever contradict it.
+5. **Only directly declared jars were read** (was §9.3.1, now closed). A class reached
+   through a transitive artifact was never a node, so every edge to it vanished. The
+   canonical case: `org.apache.pulsar.client.api.Producer` lives in the companion artifact
+   `pulsar-client-api`, which nothing declares, so `PulsarSender` appeared to use no Pulsar
+   at all and `pulsar-client` was reported as an unused dependency. `DependencyClosure`
+   now resolves each module's real classpath and writes it as `RESOLVES`, carrying `depth`
+   and `viaGa` — which is also a new query, "why is this jar on my classpath".
+
+6. **Offline collection needs central declared anyway.** Passing an empty repository list
+   when offline looks right and is wrong: `session.setOffline()` is what blocks the network,
+   while the repository list is what Aether's local manager matches a *cached* artifact
+   against. With it empty, every already-downloaded pom looked unavailable and 9 of 16
+   modules silently fell back to their direct dependencies only.
+
+7. **Counting drops before applying policy made the number meaningless.** Library-to-library
+   edges are not written by choice; counting them as "dropped" put 20,000 deliberate
+   exclusions into a figure whose entire job is to mean "the graph is incomplete". Policy is
+   now applied first, and the two counters — `droppedEdges` and `filteredLibraryEdges` — are
+   separate on the `:Project` node.
+
+8. **Array types were never unwrapped.** ASM hands over an internal name for an object type
+   but a *descriptor* for an array one, so `(Part[]) x` produced an edge to a class called
+   `[Lcom.boeing.Part;`, which nothing declares. This was the last 102 edges. `fqn()` now
+   detects a leading `[` and unwraps through `typeOf`, and two tests hold the invariant that
+   no type or edge endpoint is ever a raw descriptor.
+
+**`droppedEdges` is now 0**, and `missing-classes` — which lists the packages a dropped edge
+pointed into — returns nothing. That number is the one to watch: it is the difference
+between a graph that is smaller than the codebase and a graph that is quietly wrong about it.
+
+#### A policy, deliberately not a defect
+
+Relationships between two library types are not written (`depgraph.include-library-edges`,
+default false). On this estate that is 520,772 of 528,428 relationships. Nothing reads them:
+every question the tool exists to answer has the project's own code at one end. Library
+types are still written as nodes, so no edge is missing an endpoint and "what else does this
+jar expose" still works. The one visible cost is `inheritance-depth`, whose chains now stop
+at the first library class; its caveat says so.
 
 ### 9.2 Not built
 
@@ -926,12 +957,14 @@ The OpenRewrite pom rewriter (§9.3.7). Gradle remains out of scope by decision.
 
 ### 9.3 Open for this review
 
-1. **Transitive dependencies are not captured.** Only each module's *direct* effective
-   dependencies are read. The full resolved tree would answer "which transitive brought
-   this in", but it is a genuine resolution per module rather than a model build, and
-   costs an order of magnitude more time. Deferred pending a decision — the `FROM` bridge
-   may make it unnecessary, since a type that is used and undeclared is more useful than
-   knowing which path supplied it.
+1. ~~**Transitive dependencies are not captured.**~~ **Closed.** Deferring this turned out
+   not to be an option: without the transitive closure an eighth of the code plane's edges
+   had no target and were discarded, which made a heavily used dependency look unused. See
+   §9.1.5. `DependencyClosure` collects (rather than resolves) each module's graph, so it
+   stays offline-safe, and the cost is about 3 seconds on 16 modules. Still open underneath
+   it: transitive rows are written as `RESOLVES` but *not* as `DECLARES_DEP`, so the
+   conflict analyser still considers direct declarations only — a transitive version clash
+   that Maven mediates silently is not yet reported.
 
 2. **Reactor-aware model resolution.** A BOM imported with `scope=import` that lives
    *inside* the scanned tree but was never `mvn install`ed cannot be resolved, so those

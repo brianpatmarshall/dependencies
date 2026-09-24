@@ -19,6 +19,14 @@ import java.util.List;
  *                      turning them off makes the graph small and fast at the cost of
  *                      every question that spans the boundary, which is most of the
  *                      interesting ones
+ * @param includeLibraryEdges whether relationships between two library types are written.
+ *                      Off by default, and this is the single biggest lever on graph size:
+ *                      on this estate it is the difference between 528,000 relationships
+ *                      and about 20,000. Library-to-library coupling is netty's business,
+ *                      not ours, and no canned query reads it - every question this tool
+ *                      exists to answer has our own code at one end. Library types are
+ *                      still written as nodes either way, so nothing an edge needs is
+ *                      missing and "what else does this jar contain" still has an answer
  * @param includeMembers whether {@code :Method} and {@code :Field} nodes are written.
  *                      Off by default: that is 300,000 more nodes, and no canned query
  *                      needs them because every edge the tool records is already
@@ -32,6 +40,7 @@ public record DepGraphProperties(
     Path localRepository,
     boolean offline,
     boolean includeThirdPartyTypes,
+    boolean includeLibraryEdges,
     boolean includeMembers,
     int batchSize,
     int queryTimeoutSeconds,

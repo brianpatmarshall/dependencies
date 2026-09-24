@@ -323,9 +323,26 @@ class AsmClassVisitor extends ClassVisitor {
         return "java/lang/Record".equals(superName) ? TypeKind.RECORD : TypeKind.CLASS;
     }
 
-    /** Internal name to fully qualified name. */
+    /**
+     * Internal name to fully qualified name.
+     *
+     * <p>ASM hands over an internal name for an object type but a <em>descriptor</em> for
+     * an array one: {@code visitTypeInsn} for {@code (Part[]) x} gives
+     * {@code [Lcom/boeing/Part;}, and calling a method on an array gives the same as the
+     * owner. Replacing slashes alone turned that into a class named
+     * {@code [Lcom.boeing.Part;}, which nothing declares - so the type never matched a
+     * node and every edge through an array pointed at nothing. It accounted for the last
+     * 102 of the 26,099 relationships this tool was dropping.
+     */
     private static String fqn(String internalName) {
-        return internalName == null ? null : internalName.replace('/', '.');
+        if (internalName == null) {
+            return null;
+        }
+        if (internalName.charAt(0) == '[') {
+            // A descriptor, not a name. typeOf unwraps to the element and drops primitives.
+            return typeOf(Type.getType(internalName));
+        }
+        return internalName.replace('/', '.');
     }
 
     /** A descriptor's type, unwrapping arrays and dropping primitives. */

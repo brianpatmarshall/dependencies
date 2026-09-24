@@ -175,9 +175,13 @@ public final class CannedQueries {
             """
             MATCH (m:Module)-[d:DECLARES_DEP]->(v:ArtifactVersion)-[:VERSION_OF]->(a:Artifact)
             WHERE m.built = true AND d.testOnly = false AND d.optional = false
+              AND EXISTS { (:Type)-[:FROM]->(v) }
               AND NOT (m)-[:USES_CODE]->(:ArtifactVersion)-[:VERSION_OF]->(a)
               AND NOT (m)-[:USES_CODE]->(:Module {ga: a.ga})
-              AND EXISTS { (:Type)-[:FROM]->(v) }
+              AND NOT EXISTS {
+                    MATCH (m)-[:RESOLVES {viaGa: a.ga}]->(brought:ArtifactVersion)
+                    WHERE (m)-[:USES_CODE]->(brought)
+              }
             RETURN m.label AS module, a.ga AS declaredButUnused,
                    v.version AS version, d.scope AS scope
             ORDER BY module, declaredButUnused
@@ -192,8 +196,10 @@ public final class CannedQueries {
                 + "pulled in does not read as unused. The bigger gap is transitive: only "
                 + "directly declared jars are read, so a library whose API type lives in a "
                 + "companion artifact - pulsar-client's interfaces are in pulsar-client-api "
-                + "- shows up here although it is used. Check 'Declared jars that contributed "
-                + "no types' and the dropped-edge count before believing a row.", true),
+                + "- is credited for what it brought in, via RESOLVES. What remains is "
+                + "genuinely unreferenced by compiled code, which for a runtime binding like "
+                + "logback-classic is correct and expected. Check 'Classes referenced but "
+                + "never read' before believing a row.", true),
 
         new CannedQuery("undeclared-usage", Category.BRIDGE,
             "Used but never declared",
@@ -275,6 +281,20 @@ public final class CannedQueries {
             "Usually a transitive jar: it is on the classpath without being any module's "
                 + "declared dependency, so nothing in the build plane names it.", true),
 
+        new CannedQuery("transitive-origin", Category.BRIDGE,
+            "Why is this jar on my classpath?",
+            "Which direct dependency brought this artifact in, and at what depth?",
+            """
+            MATCH (m:Module)-[c:RESOLVES]->(v:ArtifactVersion)-[:VERSION_OF]->(a:Artifact {ga: $ga})
+            RETURN m.label AS module, v.version AS version, c.depth AS depth,
+                   CASE c.depth WHEN 0 THEN '(declared directly)' ELSE c.viaGa END AS broughtInBy,
+                   c.scope AS scope
+            ORDER BY depth, module
+            """,
+            List.of(new Param("ga", "groupId:artifactId", "org.apache.pulsar:pulsar-client-api")),
+            "RESOLVES is the classpath Maven would build, which is a longer list than "
+                + "DECLARES_DEP - the poms. depth 0 means the module names it itself.", false),
+
         // ------------------------------------------------------------ code
         new CannedQuery("most-depended-types", Category.CODE,
             "Most depended-upon types",
@@ -329,8 +349,9 @@ public final class CannedQueries {
             ORDER BY edges DESC
             """,
             List.of(),
-            "Library types are read surface-only, so BODY relations (CALLS, INSTANTIATES) "
-                + "appear almost entirely between our own classes.", true),
+            "Counts only relationships with our own code at one end, which is all that is "
+                + "written by default. Library types are also read surface-only, so BODY "
+                + "relations (CALLS, INSTANTIATES) are almost entirely ours.", true),
 
         new CannedQuery("inheritance-depth", Category.CODE,
             "Deepest inheritance chains",
@@ -343,7 +364,10 @@ public final class CannedQueries {
             ORDER BY depth DESC, type
             LIMIT 25
             """,
-            List.of(), null, true),
+            List.of(),
+            "Chains stop at the first library class by default, because relationships "
+                + "between two library types are not written (depgraph.include-library-edges). "
+                + "This measures depth within our own hierarchy, not into the JDK.", true),
 
         new CannedQuery("types-between-modules", Category.CODE,
             "What couples two modules",
@@ -402,6 +426,23 @@ public final class CannedQueries {
                 + "are read from target/classes instead, and a jar that was never found in the "
                 + "local repository. Only the last is a problem, and nothing about an artifact "
                 + "in this list can be concluded from the code plane.", true),
+
+        new CannedQuery("missing-classes", Category.HEALTH,
+            "Classes referenced but never read",
+            "Which packages does our code reference that the scan never resolved?",
+            """
+            MATCH (p:MissingPackage)
+            RETURN p.name AS package, p.references AS references,
+                   p.types AS distinctTypes, p.examples AS examples
+            ORDER BY references DESC
+            LIMIT 50
+            """,
+            List.of(),
+            "Every row is a gap in the graph, and the reason an 'unused dependency' finding "
+                + "needs checking: an edge whose target was never read is not written, so the "
+                + "evidence of use disappears. Usually a jar missing from the local "
+                + "repository, or a module that fell back to its direct dependencies because "
+                + "a transitive pom could not be resolved offline.", true),
 
         new CannedQuery("graph-overview", Category.HEALTH,
             "What is in the graph",

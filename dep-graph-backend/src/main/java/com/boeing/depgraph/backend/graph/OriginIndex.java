@@ -1,9 +1,8 @@
 package com.boeing.depgraph.backend.graph;
 
-import com.boeing.depgraph.code.ArtifactJars;
-import com.boeing.depgraph.model.DeclaredDependency;
 import com.boeing.depgraph.model.Gav;
 import com.boeing.depgraph.model.ModuleRef;
+import com.boeing.depgraph.model.ResolvedArtifact;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -39,9 +38,7 @@ public final class OriginIndex {
         this.jars = jars;
     }
 
-    public static OriginIndex build(List<ModuleRef> modules,
-                                    List<DeclaredDependency> dependencies,
-                                    Path localRepository) {
+    public static OriginIndex build(List<ModuleRef> modules, List<ResolvedArtifact> classpath) {
         Map<String, String> dirs = new LinkedHashMap<>();
         for (ModuleRef module : modules) {
             Path pom = Path.of(module.pomPath()).toAbsolutePath();
@@ -54,8 +51,14 @@ public final class OriginIndex {
             .sorted((a, b) -> Integer.compare(b.getKey().length(), a.getKey().length()))
             .toList();
 
-        Map<String, Gav> jars = ArtifactJars.index(dependencies, localRepository);
-        log.info("Origin index: {} module directories, {} dependency jars",
+        // From the scan's own resolved classpath, so transitively supplied jars are
+        // attributable too. Built from declared dependencies alone, every type arriving
+        // through a transitive artifact was unattributable and its edges were discarded.
+        Map<String, Gav> jars = new LinkedHashMap<>();
+        for (ResolvedArtifact artifact : classpath) {
+            jars.putIfAbsent(artifact.jarPath(), artifact.gav());
+        }
+        log.info("Origin index: {} module directories, {} classpath jars",
             ordered.size(), jars.size());
         return new OriginIndex(ordered, jars);
     }

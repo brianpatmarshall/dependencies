@@ -52,8 +52,7 @@ public class ScanService {
         progress.accept("Read " + result.stats().modulesRead() + " modules, "
             + result.stats().dependencyCount() + " dependencies");
 
-        OriginIndex origins = OriginIndex.build(
-            result.modules(), result.dependencies(), properties.localRepository());
+        OriginIndex origins = OriginIndex.build(result.modules(), result.classpath());
 
         populator.populate(result, origins, progress);
 

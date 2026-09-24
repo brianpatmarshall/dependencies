@@ -30,6 +30,11 @@ depgraph:
   # interesting ones.
   include-third-party-types: ${DEPGRAPH_INCLUDE_THIRD_PARTY:true}
 
+  # Relationships between two library types. The biggest lever on graph size there is: on
+  # the aero estate it is 528,000 relationships against about 20,000. Nothing reads them -
+  # every question this tool exists to answer has our own code at one end.
+  include-library-edges: ${DEPGRAPH_INCLUDE_LIBRARY_EDGES:false}
+
   # :Method and :Field nodes. 300,000 more nodes that no canned query needs, because every
   # edge is already type-to-type with its member recorded on the relationship.
   include-members: ${DEPGRAPH_INCLUDE_MEMBERS:false}

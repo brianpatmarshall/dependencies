@@ -40,10 +40,35 @@ public final class PomLocator {
 
     private static final int MAX_DEPTH = 24;
 
+    /**
+     * Directory pairs that mark a test fixture rather than a module of the project.
+     *
+     * <p>A scanner's test resources contain deliberately broken and deliberately conflicting
+     * poms - that is their job. Counted as modules they are indistinguishable from real
+     * ones, and on this estate they supplied three of five reported version conflicts and
+     * nine of nine unreadable poms. The estate's other two scanners settled this the same
+     * way: test types are skipped entirely.
+     *
+     * <p>Matched on the path <em>relative to the scan root</em>, which is what makes it safe
+     * to point the tool straight at a fixture. Scan {@code .../sample-estate} and its poms
+     * are the project; scan the repository above it and they are fixtures again.
+     */
+    private static final List<String> TEST_PATH_SEGMENTS = List.of(
+        "src/test", "src/it", "src/integration-test");
+
     private PomLocator() {
     }
 
     public static List<Path> findPoms(Path root) throws IOException {
+        return findPoms(root, false);
+    }
+
+    /**
+     * @param includeTestFixtures true to keep poms under {@code src/test} and friends. Off
+     *                            by default; worth switching on to analyse a fixture estate
+     *                            in place without pointing the scan root at it
+     */
+    public static List<Path> findPoms(Path root, boolean includeTestFixtures) throws IOException {
         if (!Files.isDirectory(root)) {
             throw new IOException("Scan root is not a directory: " + root);
         }
@@ -82,7 +107,45 @@ public final class PomLocator {
         });
 
         poms.sort(Path::compareTo);
-        log.info("Found {} pom files under {}", poms.size(), root);
-        return poms;
+
+        if (includeTestFixtures) {
+            log.info("Found {} pom files under {}", poms.size(), root);
+            return poms;
+        }
+
+        Path base = root.toAbsolutePath().normalize();
+        List<Path> kept = new ArrayList<>();
+        int fixtures = 0;
+        for (Path pom : poms) {
+            if (isTestFixture(base, pom)) {
+                fixtures++;
+            } else {
+                kept.add(pom);
+            }
+        }
+        if (fixtures > 0) {
+            log.info("Found {} pom files under {}, skipping {} test fixture(s)",
+                poms.size(), root, fixtures);
+        } else {
+            log.info("Found {} pom files under {}", poms.size(), root);
+        }
+        return kept;
+    }
+
+    static boolean isTestFixture(Path root, Path pom) {
+        String relative;
+        try {
+            relative = root.relativize(pom.toAbsolutePath().normalize()).toString();
+        } catch (IllegalArgumentException e) {
+            // Different roots - a symlink out of the tree. Nothing to judge it against.
+            return false;
+        }
+        String normalised = relative.replace('\\', '/');
+        for (String segment : TEST_PATH_SEGMENTS) {
+            if (normalised.startsWith(segment + "/") || normalised.contains("/" + segment + "/")) {
+                return true;
+            }
+        }
+        return false;
     }
 }

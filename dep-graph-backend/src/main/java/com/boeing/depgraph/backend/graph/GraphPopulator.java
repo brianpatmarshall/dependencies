@@ -9,6 +9,7 @@ import com.boeing.depgraph.model.Gav;
 import com.boeing.depgraph.model.ManagedDependency;
 import com.boeing.depgraph.model.ModuleLink;
 import com.boeing.depgraph.model.ModuleRef;
+import com.boeing.depgraph.model.ResolvedArtifact;
 import com.boeing.depgraph.model.TypeEdge;
 import com.boeing.depgraph.model.TypeRef;
 import com.boeing.depgraph.model.VersionUse;
@@ -23,6 +24,7 @@ import org.springframework.stereotype.Component;
 import java.util.ArrayList;
 import java.util.HashSet;
 import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -82,6 +84,9 @@ public class GraphPopulator {
         progress.accept("Writing pom topology");
         writeModuleLinks(result);
 
+        progress.accept("Writing the resolved classpath");
+        writeClasspath(result);
+
         progress.accept("Writing the proposed BOM");
         writeBomProposal(result);
         writeProblems(result);
@@ -95,8 +100,8 @@ public class GraphPopulator {
             writeBridge(code, origins);
 
             progress.accept("Writing " + code.edges().size() + " type relationships");
-            int dropped = writeTypeEdges(code);
-            recordDroppedEdges(result, dropped);
+            EdgeCounts counts = writeTypeEdges(code);
+            recordEdgeCounts(result, counts);
 
             progress.accept("Rolling up type dependencies");
             rollUpTypeDependencies();
@@ -357,6 +362,58 @@ public class GraphPopulator {
         }
     }
 
+    /**
+     * Each module's real classpath, transitives included.
+     *
+     * <p>Deliberately a different relationship from {@code DECLARES_DEP}, which is what the
+     * pom says. {@code depth} and {@code viaGa} are what turn "this jar is on my classpath"
+     * into "and here is the direct dependency that brought it", which is the question
+     * anyone asks the moment a transitive version surprises them.
+     */
+    private void writeClasspath(ScanResult result) {
+        List<Map<String, Object>> rows = new ArrayList<>();
+        Set<String> gavs = new HashSet<>();
+        for (ResolvedArtifact artifact : result.classpath()) {
+            Map<String, Object> row = new LinkedHashMap<>();
+            row.put("pomPath", artifact.modulePomPath());
+            row.put("gav", artifact.gav().gav());
+            row.put("ga", artifact.key().ga());
+            row.put("groupId", artifact.gav().groupId());
+            row.put("artifactId", artifact.gav().artifactId());
+            row.put("version", s(artifact.gav().version()));
+            row.put("depth", artifact.depth());
+            row.put("scope", s(artifact.scope()));
+            row.put("viaGa", s(artifact.viaGa()));
+            rows.add(row);
+            gavs.add(artifact.gav().gav());
+        }
+        if (rows.isEmpty()) {
+            return;
+        }
+
+        // Transitives are new nodes: nothing in the build plane ever named them.
+        batch("""
+            UNWIND $rows AS r
+            MERGE (v:ArtifactVersion {gav: r.gav})
+            ON CREATE SET v.ga = r.ga, v.groupId = r.groupId,
+                          v.artifactId = r.artifactId, v.version = r.version
+            MERGE (a:Artifact {ga: r.ga})
+            ON CREATE SET a.groupId = r.groupId, a.artifactId = r.artifactId
+            MERGE (v)-[:VERSION_OF]->(a)
+            """, rows, Map.of());
+
+        batch("""
+            UNWIND $rows AS r
+            MATCH (m:Module {pomPath: r.pomPath})
+            MATCH (v:ArtifactVersion {gav: r.gav})
+            MERGE (m)-[c:RESOLVES]->(v)
+            SET c.depth = r.depth, c.scope = r.scope, c.viaGa = r.viaGa,
+                c.direct = (r.depth = 0)
+            """, rows, Map.of());
+
+        log.info("Classpath: {} rows, {} distinct artifact versions", rows.size(), gavs.size());
+    }
+
     private void writeBomProposal(ScanResult result) {
         BomProposal proposal = result.proposal();
         if (proposal == null) {
@@ -543,20 +600,43 @@ public class GraphPopulator {
      * loss, and the query it corrupts is "declared but never used": the dependency looks
      * unused precisely because the evidence of its use was dropped.
      */
-    private int writeTypeEdges(CodeScanResult code) {
+    private EdgeCounts writeTypeEdges(CodeScanResult code) {
         Set<String> present = new HashSet<>();
+        Set<String> ours = new HashSet<>();
         for (TypeRef t : code.types()) {
             if (t.thirdParty() && !properties.includeThirdPartyTypes()) {
                 continue;
             }
             present.add(t.fqn());
+            if (!t.thirdParty()) {
+                ours.add(t.fqn());
+            }
         }
 
         int dropped = 0;
+        int filtered = 0;
+        Map<String, int[]> missingByPackage = new LinkedHashMap<>();
+        Map<String, Set<String>> missingTypes = new LinkedHashMap<>();
         Map<String, List<Map<String, Object>>> byRelation = new LinkedHashMap<>();
         for (TypeEdge e : code.edges()) {
+            // Policy first, and the order matters. Both ends being somebody else's code
+            // makes this a fact about their internals, so it is not written - and an edge
+            // we were never going to write is not a gap. Counting presence first put
+            // 20,000 library-internal edges into `dropped` and made the number that is
+            // supposed to mean "the graph is incomplete" mean nothing at all.
+            boolean wanted = properties.includeLibraryEdges()
+                || ours.contains(e.fromFqn()) || ours.contains(e.toFqn());
+            if (!wanted) {
+                filtered++;
+                continue;
+            }
             if (!present.contains(e.fromFqn()) || !present.contains(e.toFqn())) {
                 dropped++;
+                if (!present.contains(e.toFqn())) {
+                    String pkg = packageOf(e.toFqn());
+                    missingByPackage.computeIfAbsent(pkg, k -> new int[1])[0]++;
+                    missingTypes.computeIfAbsent(pkg, k -> new LinkedHashSet<>()).add(e.toFqn());
+                }
                 continue;
             }
             byRelation.computeIfAbsent(e.relation().name(), k -> new ArrayList<>())
@@ -575,10 +655,48 @@ public class GraphPopulator {
             """.formatted(relation), rows, Map.of()));
 
         if (dropped > 0) {
-            log.warn("{} type relationships point at a class that was never read - almost "
-                + "always a transitive artifact nobody declares directly", dropped);
+            log.warn("{} type relationships point at a class that was never read, across {} "
+                + "package(s)", dropped, missingByPackage.size());
+            writeMissingPackages(missingByPackage, missingTypes);
         }
-        return dropped;
+        if (filtered > 0) {
+            log.info("{} relationships between two library types were not written "
+                + "(depgraph.include-library-edges)", filtered);
+        }
+        return new EdgeCounts(dropped, filtered);
+    }
+
+    private record EdgeCounts(int dropped, int filtered) {}
+
+    /**
+     * The packages a dropped edge pointed into, as nodes.
+     *
+     * <p>A count alone says the graph is incomplete; this says where. Every row is a
+     * library whose classes the project references and the closure never resolved, which
+     * is the only way to tell a real gap from a deliberate exclusion - and the only way an
+     * "unused dependency" finding can be checked rather than believed.
+     */
+    private void writeMissingPackages(Map<String, int[]> counts, Map<String, Set<String>> types) {
+        List<Map<String, Object>> rows = new ArrayList<>();
+        counts.forEach((pkg, count) -> {
+            Set<String> examples = types.getOrDefault(pkg, Set.of());
+            rows.add(Map.of(
+                "name", pkg,
+                "references", count[0],
+                "types", examples.size(),
+                "examples", examples.stream().limit(5).toList()));
+        });
+
+        batch("""
+            UNWIND $rows AS r
+            MERGE (p:MissingPackage {name: r.name})
+            SET p.references = r.references, p.types = r.types, p.examples = r.examples
+            """, rows, Map.of());
+    }
+
+    private static String packageOf(String fqn) {
+        int lastDot = fqn.lastIndexOf('.');
+        return lastDot < 0 ? "(default)" : fqn.substring(0, lastDot);
     }
 
     /**
@@ -640,11 +758,12 @@ public class GraphPopulator {
      * <p>A graph that quietly lost 40,000 edges looks exactly like a codebase that is less
      * coupled than it is, and nothing else in the system would ever say otherwise.
      */
-    private void recordDroppedEdges(ScanResult result, int dropped) {
+    private void recordEdgeCounts(ScanResult result, EdgeCounts counts) {
         run("""
             MATCH (p:Project {path: $path})
-            SET p.droppedEdges = $dropped
-            """, Map.of("path", result.projectPath(), "dropped", dropped));
+            SET p.droppedEdges = $dropped, p.filteredLibraryEdges = $filtered
+            """, Map.of("path", result.projectPath(),
+                          "dropped", counts.dropped(), "filtered", counts.filtered()));
     }
 
     // ------------------------------------------------------------------ plumbing

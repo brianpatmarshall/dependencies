@@ -78,18 +78,20 @@ into a block.
 
 ## Status
 
-**Complete end to end**, with 157 tests. `dep-graph-core` reads poms, resolves effective
-versions, maps how the poms point at each other, classifies conflicts, proposes a BOM, and
-reads compiled bytecode into seventeen kinds of class-to-class edge. `dep-graph-backend`
-writes all of it into Neo4J and serves 27 canned queries; `dep-graph-frontend` is the UI
-you click them in.
+**Complete end to end**, with 167 tests. `dep-graph-core` reads poms, resolves effective
+versions and each module's full classpath, maps how the poms point at each other,
+classifies conflicts, proposes a BOM, and reads compiled bytecode into seventeen kinds of
+class-to-class edge. `dep-graph-backend` writes all of it into Neo4J and serves 29 canned
+queries; `dep-graph-frontend` is the UI you click them in.
 
-On the Aero estate: 36 modules and 163 dependencies on one side; 35,727 classes into
-203,751 relationships on the other. A full scan and graph write takes about 28 seconds.
+On the Aero estate: 23 modules, 163 dependencies and 2 conflicts on one side; 101,372
+types and 528,428 relationships on the other. A full scan and graph write takes about 26
+seconds, and **drops nothing** — every relationship either lands in the graph or is
+excluded by a policy that says so.
 
-**The `FROM` bridge is joined.** Every type is now connected to the module or artifact
-version that supplied it, which is what makes the six queries under "Where the poms and
-the bytecode disagree" possible at all.
+**The `FROM` bridge is joined.** Every type is connected to the module or artifact version
+that supplied it, which is what makes the seven queries under "Where the poms and the
+bytecode disagree" possible at all.
 
 Still not built: the OpenRewrite pom rewriter (§9.3.7).
 
@@ -127,11 +129,28 @@ the Docker daemon. `scripts/depgraph-stack` does the two steps in order.
 
 ### The canned queries
 
-27 of them, in five groups, each carrying the question it answers in plain words and — where
+29 of them, in five groups, each carrying the question it answers in plain words and — where
 it has one — the reason its answer might be wrong. The group that matters is **"Where the
 poms and the bytecode disagree"**: declared but never used, used but never declared, blast
-radius, what couples two modules. None of those can be answered by reading poms or bytecode
-alone, which is the whole argument for putting both planes in one graph.
+radius, why a jar is on the classpath at all, what couples two modules. None of those can be
+answered by reading poms or bytecode alone, which is the whole argument for putting both
+planes in one graph.
+
+### Two things it deliberately does not do
+
+**Test fixtures are not modules.** A pom under `src/test`, `src/it` or
+`src/integration-test` is skipped. Scanner fixtures are *meant* to contain broken and
+conflicting poms, and counted as modules they are indistinguishable from real ones — on
+this estate they supplied three of five reported conflicts and nine of nine unreadable
+poms. The rule is applied to the path *relative to the scan root*, so pointing the tool
+straight at a fixture estate still analyses it. `PomLocator.findPoms(root, true)` keeps them.
+
+**Relationships between two library types are not written.** Netty's internal coupling is
+not a fact about your project, and no query reads it: every question here has your own code
+at one end. On this estate it is the difference between 528,000 relationships and 7,600.
+Library types are still written as *nodes*, so nothing an edge needs is missing and "what
+else does this jar contain" still has an answer. Set
+`DEPGRAPH_INCLUDE_LIBRARY_EDGES=true` for the full graph.
 
 ## Building
 

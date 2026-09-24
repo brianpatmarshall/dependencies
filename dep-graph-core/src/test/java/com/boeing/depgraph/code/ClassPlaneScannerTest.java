@@ -54,6 +54,32 @@ class ClassPlaneScannerTest {
         assertThat(result.types()).allSatisfy(t -> assertThat(t.thirdParty()).isFalse());
     }
 
+    // ------------------------------------------------------------------ arrays
+
+    @Test
+    @DisplayName("an array of a project type is an edge to the element type, not to a descriptor")
+    void unwrapsArrayDescriptors() {
+        // PartsBin only ever touches Part through an array: Part[][], parts.clone() and a
+        // cast to Part[]. Every one of those hands ASM a descriptor rather than a name.
+        assertThat(allFrom("PartsBin"))
+            .extracting(TypeEdge::toFqn)
+            .contains(PKG + "Part");
+    }
+
+    @Test
+    @DisplayName("no type or edge endpoint is ever a raw descriptor")
+    void neverRecordsADescriptorAsAType() {
+        assertThat(result.types()).extracting(TypeRef::fqn)
+            .allSatisfy(fqn -> assertThat(fqn).doesNotStartWith("[").doesNotContain(";"));
+
+        // The invariant that matters: a descriptor here names no class, so the edge is
+        // written into the graph and silently matches nothing.
+        assertThat(result.edges()).allSatisfy(edge -> {
+            assertThat(edge.fromFqn()).doesNotStartWith("[").doesNotContain(";");
+            assertThat(edge.toFqn()).doesNotStartWith("[").doesNotContain(";");
+        });
+    }
+
     // ------------------------------------------------------------ the three asked for
 
     @Test
