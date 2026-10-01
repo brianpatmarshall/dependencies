@@ -5,16 +5,11 @@
     <modelVersion>4.0.0</modelVersion>
 
     <!--
-        One parent for the whole Aero estate: Java level, encoding, plugin versions and the
-        dependency BOM. relativePath is empty on purpose - this repository is cloned on its
-        own, so the parent is resolved from the artifact repository, not a sibling directory.
+        No parent. This repository is cloned and built on its own, so it carries the Java
+        level, encoding, plugin versions and dependency versions it needs itself rather
+        than resolving them from aero-parent / aero-bom. The values below are kept equal
+        to what those two decide; if the estate moves, move them here too.
     -->
-    <parent>
-        <groupId>com.boeing.aero</groupId>
-        <artifactId>aero-parent</artifactId>
-        <version>1.0.0-SNAPSHOT</version>
-        <relativePath/>
-    </parent>
 
     <groupId>com.boeing</groupId>
     <artifactId>dep-graph-parent</artifactId>
@@ -38,27 +33,96 @@
     </modules>
 
     <!--
-        Java level, encoding, plugin versions and every third-party dependency version come
-        from aero-parent / aero-bom. Build those first:
-
-            mvn -f ../platform/pom.xml install
-
         To build for a different Java level:
 
             mvn -Djava.version=25 clean verify
             JAVA_VERSION=25 docker compose build
     -->
 
+    <properties>
+        <java.version>21</java.version>
+        <maven.compiler.release>${java.version}</maven.compiler.release>
+
+        <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
+        <project.reporting.outputEncoding>UTF-8</project.reporting.outputEncoding>
+
+        <!-- Boot's BOM manages jackson, snakeyaml, slf4j, logback, junit, assertj and the
+             neo4j driver; everything else this repository uses is pinned below. -->
+        <spring-boot.version>3.5.16</spring-boot.version>
+
+        <!-- Used in <annotationProcessorPaths>, where dependencyManagement does not reach.
+             Kept equal to the version Boot 3.5.16 manages. -->
+        <lombok.version>1.18.46</lombok.version>
+
+        <!--
+            Maven's own libraries, held together at the pair Maven 3.9.6 itself ships:
+            model-builder 3.9.6 is built against resolver 1.9.18, and mixing the two lines
+            is how you get a NoSuchMethodError at model-build time.
+        -->
+        <maven.version>3.9.6</maven.version>
+        <maven-resolver.version>1.9.18</maven-resolver.version>
+
+        <!-- First release that accepts class file major 69 (JDK 25). -->
+        <asm.version>9.9.1</asm.version>
+
+        <springdoc.version>2.8.9</springdoc.version>
+
+        <compiler-plugin.version>3.14.1</compiler-plugin.version>
+        <surefire-plugin.version>3.5.6</surefire-plugin.version>
+        <shade-plugin.version>3.5.1</shade-plugin.version>
+        <jar-plugin.version>3.4.1</jar-plugin.version>
+        <resources-plugin.version>3.3.1</resources-plugin.version>
+    </properties>
+
     <dependencyManagement>
         <dependencies>
-            <!--
-                The only version this repository decides for itself: its own module, which
-                moves with ${project.version} and so cannot come from a shared BOM.
-            -->
+            <dependency>
+                <groupId>org.springframework.boot</groupId>
+                <artifactId>spring-boot-dependencies</artifactId>
+                <version>${spring-boot.version}</version>
+                <type>pom</type>
+                <scope>import</scope>
+            </dependency>
+
             <dependency>
                 <groupId>com.boeing</groupId>
                 <artifactId>dep-graph-core</artifactId>
                 <version>${project.version}</version>
+            </dependency>
+
+            <dependency>
+                <groupId>org.apache.maven</groupId>
+                <artifactId>maven-model-builder</artifactId>
+                <version>${maven.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>org.apache.maven</groupId>
+                <artifactId>maven-artifact</artifactId>
+                <version>${maven.version}</version>
+            </dependency>
+            <dependency>
+                <!-- Arrives transitively under maven-resolver-supplier at 3.9.4; managed
+                     so both halves of Maven come from the same release. -->
+                <groupId>org.apache.maven</groupId>
+                <artifactId>maven-resolver-provider</artifactId>
+                <version>${maven.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>org.apache.maven.resolver</groupId>
+                <artifactId>maven-resolver-supplier</artifactId>
+                <version>${maven-resolver.version}</version>
+            </dependency>
+
+            <dependency>
+                <groupId>org.ow2.asm</groupId>
+                <artifactId>asm</artifactId>
+                <version>${asm.version}</version>
+            </dependency>
+
+            <dependency>
+                <groupId>org.springdoc</groupId>
+                <artifactId>springdoc-openapi-starter-webmvc-ui</artifactId>
+                <version>${springdoc.version}</version>
             </dependency>
         </dependencies>
     </dependencyManagement>
@@ -69,8 +133,9 @@
                 <plugin>
                     <groupId>org.apache.maven.plugins</groupId>
                     <artifactId>maven-compiler-plugin</artifactId>
-                    <!-- Version and <release> inherited from aero-parent. -->
+                    <version>${compiler-plugin.version}</version>
                     <configuration>
+                        <release>${maven.compiler.release}</release>
                         <!--
                             Lombok is an annotation processor, and from JDK 23 javac no
                             longer runs processors it merely finds on the classpath.
@@ -85,6 +150,36 @@
                             </path>
                         </annotationProcessorPaths>
                     </configuration>
+                </plugin>
+
+                <plugin>
+                    <groupId>org.apache.maven.plugins</groupId>
+                    <artifactId>maven-surefire-plugin</artifactId>
+                    <version>${surefire-plugin.version}</version>
+                </plugin>
+
+                <plugin>
+                    <groupId>org.apache.maven.plugins</groupId>
+                    <artifactId>maven-shade-plugin</artifactId>
+                    <version>${shade-plugin.version}</version>
+                </plugin>
+
+                <plugin>
+                    <groupId>org.apache.maven.plugins</groupId>
+                    <artifactId>maven-jar-plugin</artifactId>
+                    <version>${jar-plugin.version}</version>
+                </plugin>
+
+                <plugin>
+                    <groupId>org.apache.maven.plugins</groupId>
+                    <artifactId>maven-resources-plugin</artifactId>
+                    <version>${resources-plugin.version}</version>
+                </plugin>
+
+                <plugin>
+                    <groupId>org.springframework.boot</groupId>
+                    <artifactId>spring-boot-maven-plugin</artifactId>
+                    <version>${spring-boot.version}</version>
                 </plugin>
             </plugins>
         </pluginManagement>
